@@ -1,0 +1,6 @@
+
+Flask
+moviepy>=2.0
+Pillow
+gTTS
+gunicorn
