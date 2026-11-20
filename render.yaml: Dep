@@ -1,0 +1,8 @@
+
+services:
+  - type: web
+    name: vertice-video-ai
+    runtime: python
+    buildCommand: apt-get update && apt-get install -y ffmpeg fonts-dejavu-core && pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 600 --workers 1
+    plan: free
