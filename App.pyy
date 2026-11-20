@@ -1,0 +1,174 @@
+
+import os
+import re
+import tempfile
+from flask import Flask, request, send_file, render_template_string
+from PIL import Image, ImageDraw, ImageFont
+from gtts import gTTS
+from moviepy import (
+    ImageClip,
+    AudioFileClip,
+    concatenate_videoclips,
+    concatenate_audioclips
+)
+
+app = Flask(__name__)
+
+WIDTH, HEIGHT = 1080, 1920
+
+HTML = """
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vértice Video AI</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#090b13;color:white;font-family:Arial;padding:24px}
+main{max-width:600px;margin:auto}
+h1{color:#d5b56a;letter-spacing:3px}
+p{color:#aaa}
+textarea,select{width:100%;padding:15px;border-radius:10px;
+background:#171b28;color:white;border:1px solid #333;margin:10px 0}
+button{width:100%;padding:16px;background:#c6a45b;
+border:0;border-radius:10px;font-weight:bold;font-size:16px}
+small{color:#999}
+</style>
+</head>
+<body>
+<main>
+<h1>VÉRTICE VIDEO AI</h1>
+<p>Transforme seus roteiros em vídeos automaticamente.</p>
+<form method="POST">
+<textarea name="roteiro" rows="9" placeholder="Cole seu roteiro aqui..." required></textarea>
+<select name="formato">
+<option value="vertical">Vertical 9:16</option>
+<option value="horizontal">Horizontal 16:9</option>
+</select>
+<button type="submit">GERAR MEU VÍDEO</button>
+</form>
+<small>Vértice Video AI · Tecnologia e criatividade</small>
+</main>
+</body>
+</html>
+"""
+
+def dividir_cenas(texto):
+    partes = re.split(r'(?<=[.!?])\s+', texto.strip())
+    return [p.strip() for p in partes if p.strip()][:15]
+
+def criar_imagem(texto, numero, caminho, formato):
+    w, h = (1080, 1920) if formato == "vertical" else (1920, 1080)
+    img = Image.new("RGB", (w, h))
+    pixels = img.load()
+
+    for y in range(h):
+        cor = int(12 + 20 * y / h)
+        for x in range(w):
+            pixels[x, y] = (cor, cor, cor + 13)
+
+    draw = ImageDraw.Draw(img)
+    fonte_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    fonte = ImageFont.truetype(fonte_path, max(35, int(w * 0.052)))
+    logo = ImageFont.truetype(fonte_path, max(28, int(w * 0.027)))
+
+    draw.text((w * .08, h * .12), "VÉRTICE", fill="#d5b56a", font=logo)
+    draw.rectangle(
+        (w*.08, h*.17, w*.35, h*.173),
+        fill="#d5b56a"
+    )
+
+    palavras = texto.split()
+    linhas, linha = [], ""
+
+    for palavra in palavras:
+        teste = linha + " " + palavra if linha else palavra
+        if draw.textbbox((0, 0), teste, font=fonte)[2] > w * .82:
+            linhas.append(linha)
+            linha = palavra
+        else:
+            linha = teste
+
+    if linha:
+        linhas.append(linha)
+
+    altura = len(linhas) * int(fonte.size * 1.5)
+    y = (h - altura) // 2
+
+    for linha in linhas:
+        draw.text((w*.08, y), linha, fill="white", font=fonte)
+        y += int(fonte.size * 1.5)
+
+    draw.text(
+        (w*.08, h*.88),
+        f"CENA {numero:02d}",
+        fill="#d5b56a",
+        font=logo
+    )
+
+    img.save(caminho)
+
+@app.route("/", methods=["GET", "POST"])
+def inicio():
+    if request.method == "POST":
+        roteiro = request.form.get("roteiro", "").strip()
+        formato = request.form.get("formato", "vertical")
+
+        if len(roteiro) < 10:
+            return "Digite um roteiro maior."
+
+        cenas = dividir_cenas(roteiro)
+        pasta = tempfile.mkdtemp()
+        clips, audios = [], []
+
+        try:
+            for i, cena in enumerate(cenas, 1):
+                audio_path = os.path.join(pasta, f"audio{i}.mp3")
+                imagem_path = os.path.join(pasta, f"cena{i}.png")
+
+                gTTS(text=cena, lang="pt", slow=False).save(audio_path)
+                audio = AudioFileClip(audio_path)
+                duracao = audio.duration + 0.4
+
+                criar_imagem(cena, i, imagem_path, formato)
+
+                clip = ImageClip(imagem_path).with_duration(duracao)
+                clips.append(clip)
+                audios.append(audio)
+
+            video = concatenate_videoclips(clips, method="compose")
+            narracao = concatenate_audioclips(audios)
+            video = video.with_audio(narracao)
+
+            saida = os.path.join(pasta, "vertice_video.mp4")
+            video.write_videofile(
+                saida,
+                fps=24,
+                codec="libx264",
+                audio_codec="aac",
+                preset="ultrafast",
+                threads=2,
+                logger=None
+            )
+
+            video.close()
+            narracao.close()
+            for clip in clips:
+                clip.close()
+            for audio in audios:
+                audio.close()
+
+            return send_file(
+                saida,
+                as_attachment=True,
+                download_name="vertice_video.mp4",
+                mimetype="video/mp4"
+            )
+
+        except Exception as erro:
+            return f"Erro ao gerar vídeo: {erro}", 500
+
+    return render_template_string(HTML)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
